@@ -1,5 +1,25 @@
 name: Claude Code
 
+# 统一的 @claude 入口：
+# 评论(issue 评论 / PR 评论 / PR review 评论 / review 提交)或新建 / 指派的
+# issue 里出现 @claude，就触发本 workflow。
+# 任务路由：
+#   - 在 PR 上下文（包括 fork 来的 PR 评论）→ 跑官方 code-review plugin，
+#     产出一份 PR review。
+#   - 在 Issue 上下文 → 走默认 Claude，由 Claude 自行按评论指令工作。
+#
+# 为什么不再用 `pull_request_target` 自动 review：
+#   fork 来的 PR 在 `pull_request_target` 下，GitHub 颁发的 OIDC token
+#   会带 `head_repository = <fork>`，Anthropic 的 token 交换端点据此返回
+#   401 Invalid OIDC token（与 secret 是否正确无关）。改走 `issue_comment`
+#   后，event 发生在 base 仓库上下文，head_repository = base，token 交换
+#   正常通过；fork PR 也能被维护者一键 review。
+#
+# 安全说明：
+#   本 workflow 不会主动 checkout 或执行 PR 内的代码，claude-code-action
+#   内部会再做触发者写权限校验（fork 作者默认会被它拒绝执行写操作），
+#   secrets 只在通过校验后才生效。
+
 on:
   issue_comment:
     types: [created]
@@ -21,30 +41,78 @@ jobs:
     permissions:
       contents: read
       pull-requests: write
-      issues: read
+      issues: write
       id-token: write
-      actions: read # Required for Claude to read CI results on PRs
+      actions: read # 让 Claude 能读取 PR 的 CI 结果
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
           fetch-depth: 1
 
-      - name: Run Claude Code
-        id: claude
+      # 识别当前 event 究竟是落在 PR 上还是 Issue 上：
+      #   - pull_request_review / pull_request_review_comment：必为 PR
+      #   - issues：必为 Issue
+      #   - issue_comment：GitHub 把 PR 也建模成 issue，通过 issue.pull_request
+      #     字段区分（PR 评论时该字段为对象，issue 评论时为 null）。
+      # 输出：
+      #   is_pr：'true' / 'false'
+      #   number：PR 号或 Issue 号（PR 与对应 issue 共享同一编号）
+      - name: Detect context
+        id: ctx
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          # 读 url 字段是为了拿到一个稳定的 string；对象为 null 时该变量为空。
+          ISSUE_PR_URL: ${{ github.event.issue.pull_request.url }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+        run: |
+          set -euo pipefail
+          case "$EVENT_NAME" in
+            pull_request_review|pull_request_review_comment)
+              is_pr=true
+              number="$PR_NUMBER"
+              ;;
+            issue_comment)
+              if [ -n "${ISSUE_PR_URL:-}" ]; then
+                is_pr=true
+              else
+                is_pr=false
+              fi
+              number="$ISSUE_NUMBER"
+              ;;
+            issues)
+              is_pr=false
+              number="$ISSUE_NUMBER"
+              ;;
+            *)
+              echo "::error::Unsupported event: $EVENT_NAME"
+              exit 1
+              ;;
+          esac
+          echo "is_pr=$is_pr" >> "$GITHUB_OUTPUT"
+          echo "number=$number" >> "$GITHUB_OUTPUT"
+          echo "::notice::context detected: is_pr=$is_pr, number=$number"
+
+      # PR 上下文：直接套官方 code-review plugin，跟原来的 claude-code-review.yml
+      # 行为一致，但触发源从 pull_request_target 换成了 @claude 评论，因此对
+      # fork PR 也能工作。
+      - name: Run Claude PR review
+        if: steps.ctx.outputs.is_pr == 'true'
         uses: anthropics/claude-code-action@v1
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-
-          # This is an optional setting that allows Claude to read CI results on PRs
+          plugin_marketplaces: "https://github.com/anthropics/claude-code.git"
+          plugins: "code-review@claude-code-plugins"
+          prompt: "/code-review:code-review ${{ github.repository }}/pull/${{ steps.ctx.outputs.number }}"
           additional_permissions: |
             actions: read
 
-          # Optional: Give a custom prompt to Claude. If this is not specified, Claude will perform the instructions specified in the comment that tagged it.
-          # prompt: 'Update the pull request description to include a summary of changes.'
-
-          # Optional: Add claude_args to customize behavior and configuration
-          # See https://github.com/anthropics/claude-code-action/blob/main/docs/usage.md
-          # or https://code.claude.com/docs/en/cli-reference for available options
-          # claude_args: '--allowed-tools Bash(gh pr *)'
-
+      # Issue 上下文：走默认 Claude，让它按用户在 issue / 评论里给出的指令做事。
+      - name: Run Claude for issue
+        if: steps.ctx.outputs.is_pr == 'false'
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          additional_permissions: |
+            actions: read
