@@ -1,7 +1,7 @@
 # LSP Agent Tool 化调研
 
 > 调研日期: 2026-05-05
-> 触发: 用户反馈"openwarp 模型说没 web/LSP 工具",定位发现 web 是提示词漏改 + gating,LSP 是真没注册成 agent tool。本文评估把 LSP 暴露成 BYOP agent tool 的可行性与工程量。
+> 触发: 用户反馈"zap 模型说没 web/LSP 工具",定位发现 web 是提示词漏改 + gating,LSP 是真没注册成 agent tool。本文评估把 LSP 暴露成 BYOP agent tool 的可行性与工程量。
 > 状态: 待落地。修改方案见 [#五、推荐首期范围](#五推荐首期范围--开发顺序)
 
 ---

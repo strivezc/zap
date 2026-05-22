@@ -1,17 +1,17 @@
 <div align="center">
 
-# OpenWarp
+# Zap
 
 **A fully decentralized terminal — your AI, your agents, your keys, your machine.**
 
-OpenWarp is a community fork of [Warp](https://github.com/warpdotdev/warp) that
+Zap is a community fork of [Warp](https://github.com/warpdotdev/warp) that
 **strips Warp's mandatory cloud dependency** while preserving the full Warp
 terminal experience. It opens up the AI provider layer, lets you plug in any
 third-party CLI agent, ships a built-in SSH host manager, and fixes a number of
 upstream rendering issues — all while keeping every credential, conversation,
 and agent history on your own machine.
 
-[简体中文](./README.zh-CN.md) · [Upstream Warp](https://www.warp.dev) · [Upstream sync notes](docs/openwarp-upstream-sync.md)
+[简体中文](./README.zh-CN.md) · [Upstream Warp](https://www.warp.dev) · [Upstream sync notes](docs/zap-upstream-sync.md)
 
 > Early development. No official release yet. **Not affiliated with Warp, Inc.**
 
@@ -19,13 +19,13 @@ and agent history on your own machine.
 
 ---
 
-## Why OpenWarp
+## Why Zap
 
 Upstream Warp ties AI, accounts, sync, and agent history to Warp's cloud.
-OpenWarp opens that layer entirely and **adds capabilities the upstream client
+Zap opens that layer entirely and **adds capabilities the upstream client
 does not provide**:
 
-| | Upstream Warp | OpenWarp |
+| | Upstream Warp | Zap |
 | --- | --- | --- |
 | Cloud dependency | Hard dependency on Warp backend (auth / Drive / history / Agent) | **Fully decentralized, no mandatory cloud calls** |
 | AI provider | Warp gateway only | **Any OpenAI-compatible endpoint + 6 native protocols** |
@@ -40,18 +40,18 @@ does not provide**:
 | Blocks / Workflows / Keymaps | Kept | Fully preserved, continuously synced |
 | License | AGPL-3.0 / MIT dual | Same as upstream |
 
-## Things upstream Warp does NOT support, but OpenWarp does
+## Things upstream Warp does NOT support, but Zap does
 
-These are net-new capabilities OpenWarp adds on top of the fork:
+These are net-new capabilities Zap adds on top of the fork:
 
 - **SSH host manager** — connect, configure and manage SSH hosts and sessions
   directly inside the terminal (with tmux integration). No external switcher needed.
-- **Third-party CLI agents** — bring any CLI agent into the Warp Block model.
+- **Third-party CLI agents** — bring any CLI agent into the Zap Block model.
   First-class adapters for:
   - **DeepSeek-TUI** (completion notifications, text-notification mapping,
     input-restore plumbing all wired up)
   - **Codex CLI**, **Claude Code**, and other mainstream CLI agents
-  - Unified routing through OSC9 / OSC777 into Warp's notification center
+  - Unified routing through OSC9 / OSC777 into Zap's notification center
 - **BYOP across many providers** — 6 native protocols (OpenAI / OpenAIResp /
   Anthropic / Gemini / Ollama / DeepSeek) explicitly bound; any OpenAI-compatible
   proxy works out of the box. Credentials stay local.
@@ -75,7 +75,7 @@ based on the current working directory, language, and role.
 
 **03 · Use it immediately**
 Switch models, conversations, command suggestions, and third-party agents with
-one click — the experience is identical to Warp, but every layer is yours.
+one click — the experience is identical to upstream Warp, but every layer is yours.
 
 ## Verified AI providers
 
@@ -97,7 +97,7 @@ one click — the experience is identical to Warp, but every layer is yours.
   through OSC9 into Blocks and the notification center
 - **SSH host manager** — manage SSH hosts and sessions inside the terminal,
   with tmux integration
-- **SSE streaming** — incremental block rendering identical to Warp's first-party path
+- **SSE streaming** — incremental block rendering identical to upstream's first-party path
 - **18 local tools** — shell / read / edit / search / mcp / drive docs / skills / ask,
   all executed locally
 - **System prompt templates** — eight model-family prompts ported from opencode
@@ -107,13 +107,13 @@ one click — the experience is identical to Warp, but every layer is yours.
 - **Rendering improvements** — tuned Markdown pipeline + CJK soft-wrap / bold fixes
 - **Privacy first** — Cloud Agent / Computer Use / Referral / telemetry all
   disabled by default
-- **Warp experience preserved** — continuously merged with upstream; Blocks,
+- **Warp terminal experience preserved** — continuously merged with upstream; Blocks,
   Workflows, AI commands, Keymaps and themes all kept
 - **Localized UI** — Simplified Chinese + English, community-extensible
 
 ## What we are aiming for
 
-OpenWarp wants to be the kind of terminal that:
+Zap wants to be the kind of terminal that:
 
 1. **Runs fully without any centralized service** — no account, no forced login,
    no feature that "only works when the cloud is reachable".
@@ -131,26 +131,19 @@ If you share these goals, come help us finish it.
 ## Build from source
 
 ```bash
-git clone https://github.com/zerx-lab/openwarp
-cd openwarp
+git clone https://github.com/zerx-lab/zap
+cd zap
 ./script/bootstrap   # platform-specific deps
 ./script/run         # build & run
 ./script/presubmit   # fmt / clippy / tests
 ```
 
-If you prefer raw `cargo`, **always target the OSS binary explicitly**:
+If you prefer raw `cargo`, target the OSS binary explicitly:
 
 ```bash
-cargo build --release --bin warp-oss
-cargo run   --release --bin warp-oss
+cargo build --release --bin zap-oss
+cargo run   --release --bin zap-oss
 ```
-
-> Do not run `cargo build --release` / `cargo run --release --bin {warp,stable,dev,preview}`
-> without a filter — those entry points (`local.rs` / `stable.rs` / `dev.rs` / `preview.rs`) load
-> their channel config through Warp's private `warp-channel-config` binary, which lives in a
-> closed-source repo. Compilation succeeds, but the resulting executables panic at startup
-> asking you to run `./script/install_channel_config`. That script clones an SSH repo only
-> Warp employees can access. OpenWarp users only need the `warp-oss` binary.
 
 See [WARP.md](WARP.md) for the full engineering guide (style, testing, platform notes).
 
@@ -163,11 +156,11 @@ Same as upstream Warp:
 
 ## Branches & upstream sync
 
-`zerx-lab/warp` keeps two long-lived branches:
+`zerx-lab/zap` keeps two long-lived branches:
 
 | Branch | Tracks | Purpose |
 | --- | --- | --- |
-| `main` | `zerx-lab/warp:main` (default) | OpenWarp's main development line. **All PRs target this.** |
+| `main` | `zerx-lab/zap:main` (default) | Zap's main development line. **All PRs target this.** |
 | `warp-upstream` | `warpdotdev/warp:master` | Pristine mirror of upstream Warp, used to pull in new commits. **No fork-local changes.** |
 
 **For contributors**
@@ -176,7 +169,7 @@ Open PRs against **`main`**. Never against `warp-upstream`.
 
 **For maintainers (write access)**
 
-**Do not click the "Sync fork" button** on `main` in the GitHub web UI. It would merge the entire upstream history straight into OpenWarp's main line and trigger large-scale conflicts. Pull upstream changes through the mirror branch, following the blacklist and flow in [`docs/openwarp-upstream-sync.md`](docs/openwarp-upstream-sync.md):
+**Do not click the "Sync fork" button** on `main` in the GitHub web UI. It would merge the entire upstream history straight into Zap's main line and trigger large-scale conflicts. Pull upstream changes through the mirror branch, following the blacklist and flow in [`docs/zap-upstream-sync.md`](docs/zap-upstream-sync.md):
 
 ```bash
 # one-time setup
@@ -199,19 +192,19 @@ git cherry-pick <sha>             # or merge warp-upstream when a full sync make
 </a>
 
 **[DeepSeek-TUI](https://github.com/Hmbown/DeepSeek-TUI)** — a terminal UI for the
-DeepSeek model family. OpenWarp ships first-class integration: completion
+DeepSeek model family. Zap ships first-class integration: completion
 notifications, OSC9 text-notification mapping, and input-restore plumbing are
-all wired up so DeepSeek-TUI runs as a native Block inside OpenWarp.
+all wired up so DeepSeek-TUI runs as a native Block inside Zap.
 
-Launch it with `deepseek` from any OpenWarp terminal — Block lifecycle, footer
+Launch it with `deepseek` from any Zap terminal — Block lifecycle, footer
 status and notification center all work out of the box.
 
 <br clear="left" />
 
 > **Windows note** — DeepSeek-TUI's `[notifications].method` defaults to `auto`,
 > which resolves to `Off` on Windows for any `TERM_PROGRAM` outside its
-> built-in allowlist (iTerm.app / Ghostty / WezTerm). OpenWarp identifies as
-> `WarpTerminal`, so to receive turn-completion notifications inside OpenWarp
+> built-in allowlist (iTerm.app / Ghostty / WezTerm). Zap identifies as
+> `WarpTerminal`, so to receive turn-completion notifications inside Zap
 > on Windows, add the following to `~/.deepseek/config.toml`:
 >
 > ```toml
@@ -229,12 +222,12 @@ first-class integration, open an issue — we are happy to wire more partners in
 
 Community contributions welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for the full flow.
 
-Before filing, please [search existing issues](https://github.com/zerx-lab/warp/issues).
+Before filing, please [search existing issues](https://github.com/zerx-lab/zap/issues).
 Security vulnerabilities should be reported privately per
 [CONTRIBUTING.md#reporting-security-issues](CONTRIBUTING.md#reporting-security-issues).
 
 ## Acknowledgements
 
-OpenWarp stands on the shoulders of the Warp team and many open-source projects:
+Zap stands on the shoulders of the Warp team and many open-source projects:
 
 [Warp](https://github.com/warpdotdev/warp) · [genai](https://github.com/jeremychone/rust-genai) · [opencode](https://github.com/opencode-ai/opencode) · [models.dev](https://models.dev) · [DeepSeek-TUI](https://github.com/Hmbown/DeepSeek-TUI) · [Codex CLI](https://github.com/openai/codex) · [Tokio](https://github.com/tokio-rs/tokio) · [NuShell](https://github.com/nushell/nushell) · [Alacritty](https://github.com/alacritty/alacritty) · [Hyper](https://github.com/hyperium/hyper) · [minijinja](https://github.com/mitsuhiko/minijinja) · [cosmic-text](https://github.com/pop-os/cosmic-text)

@@ -278,7 +278,7 @@ impl ShellCommandExecutor {
                         RequestCommandOutputResult::CancelledBeforeExecution,
                     ));
                 }
-                // OpenWarp:同步等待型命令(wait_until_completion=true)无条件禁用 pager。
+                // Zap:同步等待型命令(wait_until_completion=true)无条件禁用 pager。
                 //
                 // 模型自报的 `uses_pager` 不可靠 —— deepseek-v4-flash 等小模型几乎不会主动标,
                 // 一旦命中 `git diff`/`git log`/`man` 等隐式 pager 就会卡在 less 提示符,
@@ -773,7 +773,7 @@ fn effective_read_shell_command_delay(
 }
 
 /// 判断 `command` 是否会启动一个**永不主动退出**的交互会话。命中规则:
-/// - 被 Warp generator wrapper 包裹的命令,递归判断内部命令。
+/// - 被 Zap generator wrapper 包裹的命令,递归判断内部命令。
 /// - 裸 `ssh ...`(走 `parse_interactive_ssh_command`,会正确排除 `-T` / `-W`
 ///   等非交互形式)。
 /// - 带路径或带 `.exe` 的 ssh(改写为裸 `ssh` 后再判)。
@@ -798,12 +798,12 @@ fn command_starts_non_terminating_session(command: &str) -> bool {
         })
 }
 
-/// 解开 Warp 自身的 generator wrapper,把里面真正要跑的命令抽出来。
+/// 解开 Zap 自身的 generator wrapper,把里面真正要跑的命令抽出来。
 ///
 /// wrapper 协议形如:`<wrapper> <generator_id> '<inner_command>' [extra flags...]`
 /// 其中:
 /// - `<wrapper>` 是 `warp_run_generator_command`(POSIX shell)或
-///   `Warp-Run-GeneratorCommand`(PowerShell,大小写不敏感)。
+///   `Zap-Run-GeneratorCommand`(PowerShell,大小写不敏感)。
 /// - `<generator_id>` 是数字 id,这里不解析,直接跳过。
 /// - `<inner_command>` 是被单引号包裹的真实命令字符串,也就是我们要返回的内容。
 ///
@@ -812,7 +812,7 @@ fn command_starts_non_terminating_session(command: &str) -> bool {
 fn in_band_generator_command(command: &str) -> Option<String> {
     let tokens = shell_words::split(command.trim_start()).ok()?;
     if tokens.len() >= 3
-        && (tokens[0].eq_ignore_ascii_case("Warp-Run-GeneratorCommand")
+        && (tokens[0].eq_ignore_ascii_case("Zap-Run-GeneratorCommand")
             || tokens[0] == "warp_run_generator_command")
     {
         Some(tokens[2].clone())
