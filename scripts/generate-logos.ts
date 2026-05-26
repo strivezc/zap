@@ -3,10 +3,14 @@
  * Zap logo 生成器
  *
  * 流程:
- *   1. logo.png → potrace 矢量化 → assets/logo.svg(自动 trim 到 content bbox)
- *   2. sharp 读 SVG,按各尺寸光栅化为透明背景 PNG,统一外加 ~6% 内边距
- *   3. 16/32/48 三个小尺寸合成 icon.ico
- *   4. 写入 dev / preview / stable 三个 channel 的 no-padding/ 目录
+ *   1. 读取 assets/zap-logo.svg(品牌主图)
+ *   2. 同步到 logo.svg / website/public/logo.svg / website/dist/logo.svg
+ *   3. sharp 直接彩色栅格化为各尺寸透明 PNG, 统一加 ~10% safe-area padding
+ *      (Apple HIG 要求 macOS dock icon 内容只占画布 ~80%; Linux/Windows
+ *      共用同一份带 padding 的版本,视觉一致)
+ *   4. 写入根目录 logo.png(512x512)
+ *   5. 小尺寸 BMP + 大尺寸 PNG 合成 icon.ico, 与上游 warpdotdev/warp 格式对齐
+ *   6. 写入 app/channels/<ch>/icon/padded/(本仓库目前只有 oss)
  *
  * 用法:  cd scripts && bun install && bun run logos
  */
@@ -15,54 +19,60 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import sharp from "sharp";
-import potrace from "potrace";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(__dirname, "..");
-const SOURCE_PNG = path.join(REPO_ROOT, "logo.png");
-const ASSETS_DIR = path.join(REPO_ROOT, "assets");
-const SVG_OUT = path.join(ASSETS_DIR, "logo.svg");
+const SOURCE_SVG = path.join(REPO_ROOT, "assets", "zap-logo.svg");
+const ROOT_LOGO_PNG = path.join(REPO_ROOT, "logo.png");
 
-const CHANNELS = ["dev", "preview", "stable", "local", "oss"] as const;
+const SVG_MIRRORS = [
+  path.join(REPO_ROOT, "logo.svg"),
+  path.join(REPO_ROOT, "website", "public", "logo.svg"),
+  path.join(REPO_ROOT, "website", "dist", "logo.svg"),
+];
+
+// macOS DockTilePlugin 的 "Default" 皮肤(用户在设置里切换 dock 图标主题用),
+// 必须跟 app icon 默认形象保持一致;其他 20+ 装饰皮肤(aurora/neon/cow 等)不动。
+const DOCKTILE_DEFAULT_PNG = path.join(
+  REPO_ROOT,
+  "app",
+  "DockTilePlugin",
+  "Resources",
+  "warp_2.png",
+);
+
+// 本仓库目前只有 oss 一个 channel(app/channels/oss/)。
+// 如果将来新增 channel,只需在这里追加;脚本会跳过不存在的目录。
+const CANDIDATE_CHANNELS = ["oss"] as const;
 const PNG_SIZES = [16, 32, 48, 64, 128, 256, 512] as const;
-// 与上游 warpdotdev/warp 对齐: 16/32/48/64 用 BMP,256 用 PNG 嵌入 (Vista+ 标准做法)
-// 这样总大小 ~110KB 而不是全 BMP 的 370KB,避免 Windows 任务栏在窗口创建时还在解码
-// 大尺寸 BMP 而显示透明占位图标的过渡。
+// 与上游 warpdotdev/warp 对齐: 16/32/48/64 用 BMP, 256 用 PNG 嵌入。
+// 这样总大小 ~110KB, Windows 任务栏不会先解码大尺寸 BMP 而显示透明占位。
 const ICO_BMP_SIZES = [16, 32, 48, 64] as const;
 const ICO_PNG_SIZES = [256] as const;
-const PADDING_RATIO = 0.06; // 渲染时给 logo 留 6% 透明内边距,避免贴边
+// macOS dock 不会再额外加 padding, 必须靠图本身留 safe area。
+// Apple HIG 经典值是 ~10%; Linux/Windows 跟着用同一份也不会有副作用。
+const PADDING_RATIO = 0.1;
 
-function traceToSvg(input: string): Promise<string> {
-  return new Promise((resolve, reject) => {
-    potrace.trace(
-      input,
-      {
-        threshold: 128,
-        turdSize: 4,
-        optTolerance: 0.4,
-        color: "#1a1a1a",
-        background: "transparent",
-      },
-      (err, svg) => (err ? reject(err) : resolve(svg)),
-    );
-  });
+async function exists(p: string): Promise<boolean> {
+  try {
+    await fs.access(p);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
-/**
- * 渲染策略:
- *   1. SVG 在透明背景上光栅化,得到「黑色 shape + 透明」的 RGBA。
- *   2. 从画布四边对透明像素做 flood-fill,标记出「外部透明区」。
- *   3. 没被标记的透明像素就是被 shape 包围的「内部洞」,填成不透明白。
- *
- * 这样最终图像 = 外部透明 + 黑色 shape + 仅前卡片内洞为白。
- */
-async function renderPng(svg: Buffer, size: number, padding: number): Promise<Buffer> {
+async function renderPng(svg: Buffer, size: number): Promise<Buffer> {
+  const padding = Math.round(size * PADDING_RATIO);
   const inner = Math.max(1, size - padding * 2);
-  const innerPng = await sharp(svg, { density: 384 })
-    .resize(inner, inner, { fit: "contain", background: { r: 0, g: 0, b: 0, alpha: 0 } })
+  const innerPng = await sharp(svg, { density: 768 })
+    .resize(inner, inner, {
+      fit: "contain",
+      background: { r: 0, g: 0, b: 0, alpha: 0 },
+    })
     .png()
     .toBuffer();
-  const { data, info } = await sharp({
+  return sharp({
     create: {
       width: size,
       height: size,
@@ -71,66 +81,20 @@ async function renderPng(svg: Buffer, size: number, padding: number): Promise<Bu
     },
   })
     .composite([{ input: innerPng, gravity: "center" }])
-    .raw()
-    .toBuffer({ resolveWithObject: true });
-
-  const w = info.width;
-  const h = info.height;
-  const buf = Buffer.from(data);
-  const ALPHA_THRESHOLD = 16; // 抗锯齿边缘算 shape,避免漏填
-  const exterior = new Uint8Array(w * h);
-  const stack: number[] = [];
-  const tryPush = (x: number, y: number) => {
-    if (x < 0 || x >= w || y < 0 || y >= h) return;
-    const idx = y * w + x;
-    if (exterior[idx]) return;
-    if (buf[idx * 4 + 3] >= ALPHA_THRESHOLD) return;
-    exterior[idx] = 1;
-    stack.push(idx);
-  };
-  for (let x = 0; x < w; x++) {
-    tryPush(x, 0);
-    tryPush(x, h - 1);
-  }
-  for (let y = 0; y < h; y++) {
-    tryPush(0, y);
-    tryPush(w - 1, y);
-  }
-  while (stack.length) {
-    const idx = stack.pop()!;
-    const x = idx % w;
-    const y = (idx - x) / w;
-    tryPush(x - 1, y);
-    tryPush(x + 1, y);
-    tryPush(x, y - 1);
-    tryPush(x, y + 1);
-  }
-
-  for (let i = 0; i < w * h; i++) {
-    if (buf[i * 4 + 3] < ALPHA_THRESHOLD && !exterior[i]) {
-      buf[i * 4] = 255;
-      buf[i * 4 + 1] = 255;
-      buf[i * 4 + 2] = 255;
-      buf[i * 4 + 3] = 255;
-    }
-  }
-
-  return sharp(buf, { raw: { width: w, height: h, channels: 4 } })
     .png({ compressionLevel: 9 })
     .toBuffer();
 }
 
-/** 把 PNG buffer 解码成 RGBA raw,用于 ICO 中的 BMP DIB 编码 */
+/** 把 PNG buffer 解码成 RGBA raw, 用于 ICO 中的 BMP DIB 编码 */
 async function decodeRgba(png: Buffer): Promise<{ width: number; height: number; data: Buffer }> {
-  const img = sharp(png).ensureAlpha();
-  const { data, info } = await img.raw().toBuffer({ resolveWithObject: true });
+  const { data, info } = await sharp(png).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
   return { width: info.width, height: info.height, data };
 }
 
 /** ICO 中 BMP image 的编码: BITMAPINFOHEADER (height 双倍) + XOR map (BGRA, 自下而上) + AND map */
 function encodeBmpDib(rgba: { width: number; height: number; data: Buffer }): Buffer {
   const { width, height, data } = rgba;
-  if (width !== height) throw new Error(`ICO 要求方形,实际 ${width}x${height}`);
+  if (width !== height) throw new Error(`ICO 要求方形, 实际 ${width}x${height}`);
   const bpp = 32;
   const xorSize = width * height * 4;
   const andRowStride = Math.ceil(width / 32) * 4; // 每行 32-bit 对齐
@@ -138,17 +102,14 @@ function encodeBmpDib(rgba: { width: number; height: number; data: Buffer }): Bu
   const headerSize = 40;
   const buf = Buffer.alloc(headerSize + xorSize + andSize);
 
-  // BITMAPINFOHEADER
-  buf.writeUInt32LE(40, 0); // 头大小
+  buf.writeUInt32LE(40, 0);
   buf.writeInt32LE(width, 4);
   buf.writeInt32LE(height * 2, 8); // ICO 约定 height 双倍 (XOR + AND 合计)
-  buf.writeUInt16LE(1, 12); // planes
+  buf.writeUInt16LE(1, 12);
   buf.writeUInt16LE(bpp, 14);
-  buf.writeUInt32LE(0, 16); // BI_RGB 不压缩
+  buf.writeUInt32LE(0, 16); // BI_RGB
   buf.writeUInt32LE(0, 20);
-  // 24-39 全 0
 
-  // XOR map: BGRA, 自下而上
   for (let y = 0; y < height; y++) {
     const srcRow = y * width * 4;
     const dstRow = headerSize + (height - 1 - y) * width * 4;
@@ -164,7 +125,6 @@ function encodeBmpDib(rgba: { width: number; height: number; data: Buffer }): Bu
     }
   }
 
-  // AND map: 透明像素位为 1, 不透明为 0; 自下而上, 行 32-bit 对齐
   const andOffset = headerSize + xorSize;
   for (let y = 0; y < height; y++) {
     const srcRow = y * width * 4;
@@ -183,23 +143,23 @@ function encodeBmpDib(rgba: { width: number; height: number; data: Buffer }): Bu
 }
 
 /**
- * 自实现的 ICO 编码器 (取代 png-to-ico),与上游 warpdotdev/warp 的格式对齐:
- * 小尺寸 (16/32/48/64) 用 BMP/DIB; 大尺寸 (256) 直接嵌入 PNG 字节,Windows
- * 通过 magic bytes (89 50 4E 47) 识别。这样 ICO 文件总大小从 370KB 降到 ~110KB。
+ * 自实现的 ICO 编码器 (取代 png-to-ico), 与上游 warpdotdev/warp 的格式对齐:
+ * 小尺寸 (16/32/48/64) 用 BMP/DIB; 大尺寸 (256) 直接嵌入 PNG 字节, Windows
+ * 通过 magic bytes (89 50 4E 47) 识别。ICO 文件总大小 ~110KB。
  */
 async function buildIco(
   pngBySize: Map<number, Buffer>,
   bmpSizes: readonly number[],
   pngSizes: readonly number[],
 ): Promise<Buffer> {
-  type Image = { size: number; data: Buffer; isPng: boolean };
+  type Image = { size: number; data: Buffer };
   const images: Image[] = [];
   for (const size of bmpSizes) {
     const rgba = await decodeRgba(pngBySize.get(size)!);
-    images.push({ size, data: encodeBmpDib(rgba), isPng: false });
+    images.push({ size, data: encodeBmpDib(rgba) });
   }
   for (const size of pngSizes) {
-    images.push({ size, data: pngBySize.get(size)!, isPng: true });
+    images.push({ size, data: pngBySize.get(size)! });
   }
 
   const headerSize = 6;
@@ -207,19 +167,19 @@ async function buildIco(
   let dataOffset = headerSize + dirSize;
 
   const header = Buffer.alloc(headerSize);
-  header.writeUInt16LE(0, 0); // reserved
+  header.writeUInt16LE(0, 0);
   header.writeUInt16LE(1, 2); // type=ICO
   header.writeUInt16LE(images.length, 4);
 
   const dirs: Buffer[] = [];
   for (const img of images) {
     const dir = Buffer.alloc(16);
-    dir.writeUInt8(img.size >= 256 ? 0 : img.size, 0); // width (256 写 0)
-    dir.writeUInt8(img.size >= 256 ? 0 : img.size, 1); // height
-    dir.writeUInt8(0, 2); // 调色板
-    dir.writeUInt8(0, 3); // reserved
-    dir.writeUInt16LE(1, 4); // planes
-    dir.writeUInt16LE(32, 6); // bpp
+    dir.writeUInt8(img.size >= 256 ? 0 : img.size, 0); // 256 写 0
+    dir.writeUInt8(img.size >= 256 ? 0 : img.size, 1);
+    dir.writeUInt8(0, 2);
+    dir.writeUInt8(0, 3);
+    dir.writeUInt16LE(1, 4);
+    dir.writeUInt16LE(32, 6);
     dir.writeUInt32LE(img.data.length, 8);
     dir.writeUInt32LE(dataOffset, 12);
     dirs.push(dir);
@@ -230,36 +190,55 @@ async function buildIco(
 }
 
 async function main() {
-  await fs.mkdir(ASSETS_DIR, { recursive: true });
-
-  console.log(`[1/4] potrace 矢量化 ${path.relative(REPO_ROOT, SOURCE_PNG)}`);
-  const svgText = await traceToSvg(SOURCE_PNG);
-  await fs.writeFile(SVG_OUT, svgText, "utf8");
-  console.log(`      → ${path.relative(REPO_ROOT, SVG_OUT)}`);
-
-  console.log(`[2/4] 渲染 PNG (${PNG_SIZES.join("/")})`);
+  console.log(`[1/5] 读取源 SVG ${path.relative(REPO_ROOT, SOURCE_SVG)}`);
+  const svgText = await fs.readFile(SOURCE_SVG, "utf8");
   const svgBuf = Buffer.from(svgText, "utf8");
-  const pngBySize = new Map<number, Buffer>();
-  for (const size of PNG_SIZES) {
-    const padding = Math.round(size * PADDING_RATIO);
-    pngBySize.set(size, await renderPng(svgBuf, size, padding));
+
+  console.log(`[2/5] 同步 SVG 副本 (${SVG_MIRRORS.length} 份)`);
+  for (const dst of SVG_MIRRORS) {
+    if (!(await exists(path.dirname(dst)))) {
+      console.log(`      ↷ 跳过 ${path.relative(REPO_ROOT, dst)} (父目录不存在)`);
+      continue;
+    }
+    await fs.writeFile(dst, svgText, "utf8");
+    console.log(`      ✓ ${path.relative(REPO_ROOT, dst)}`);
   }
 
   console.log(
-    `[3/4] 合成 icon.ico (${ICO_BMP_SIZES.join("/")} BMP + ${ICO_PNG_SIZES.join("/")} PNG)`,
+    `[3/5] 彩色栅格化 PNG (${PNG_SIZES.join("/")}), 各尺寸保留 ${(PADDING_RATIO * 100).toFixed(0)}% safe-area`,
+  );
+  const pngBySize = new Map<number, Buffer>();
+  for (const size of PNG_SIZES) {
+    pngBySize.set(size, await renderPng(svgBuf, size));
+  }
+  await fs.writeFile(ROOT_LOGO_PNG, pngBySize.get(512)!);
+  console.log(`      ✓ ${path.relative(REPO_ROOT, ROOT_LOGO_PNG)}`);
+  if (await exists(path.dirname(DOCKTILE_DEFAULT_PNG))) {
+    await fs.writeFile(DOCKTILE_DEFAULT_PNG, pngBySize.get(512)!);
+    console.log(`      ✓ ${path.relative(REPO_ROOT, DOCKTILE_DEFAULT_PNG)}`);
+  }
+
+  console.log(
+    `[4/5] 合成 icon.ico (${ICO_BMP_SIZES.join("/")} BMP + ${ICO_PNG_SIZES.join("/")} PNG)`,
   );
   const icoBuf = await buildIco(pngBySize, ICO_BMP_SIZES, ICO_PNG_SIZES);
 
-  console.log(`[4/4] 写入 ${CHANNELS.length} 个 channel`);
-  for (const ch of CHANNELS) {
-    const outDir = path.join(REPO_ROOT, "app", "channels", ch, "icon", "no-padding");
+  console.log(`[5/5] 写入实际存在的 channel`);
+  let written = 0;
+  for (const ch of CANDIDATE_CHANNELS) {
+    const channelDir = path.join(REPO_ROOT, "app", "channels", ch);
+    if (!(await exists(channelDir))) continue;
+    const outDir = path.join(channelDir, "icon", "padded");
     await fs.mkdir(outDir, { recursive: true });
     for (const size of PNG_SIZES) {
-      const file = path.join(outDir, `${size}x${size}.png`);
-      await fs.writeFile(file, pngBySize.get(size)!);
+      await fs.writeFile(path.join(outDir, `${size}x${size}.png`), pngBySize.get(size)!);
     }
     await fs.writeFile(path.join(outDir, "icon.ico"), icoBuf);
     console.log(`      ✓ ${ch}`);
+    written += 1;
+  }
+  if (written === 0) {
+    throw new Error("未找到任何 app/channels/<ch>/ 目录");
   }
 
   console.log("✅ 完成");

@@ -6,11 +6,9 @@
     "logos": "bun run generate-logos.ts"
   },
   "dependencies": {
-    "sharp": "^0.33.5",
-    "potrace": "^2.1.8"
+    "sharp": "^0.33.5"
   },
   "devDependencies": {
-    "@types/potrace": "^2.1.5",
     "@types/bun": "^1.1.13"
   }
 }
