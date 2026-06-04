@@ -43,6 +43,8 @@ pub enum DecorationStateEvent {
 struct LanguageQueries {
     language: Arc<Language>,
     syntax_query: HighlightQuery,
+    /// Highlight queries for injected languages (e.g., JavaScript, CSS for Vue)
+    injection_queries: HashMap<String, HighlightQuery>,
 }
 
 /// Single-entry cache for highlight queries.
@@ -109,9 +111,31 @@ impl SyntaxTreeState {
     }
 
     pub fn set_language(&mut self, language: Arc<Language>) {
+        // Load injection highlight queries for embedded languages
+        let mut injection_queries = HashMap::new();
+
+        if language.injections_query.is_some() {
+            // Load JavaScript highlight query for <script> tags
+            if let Some(js_lang) = languages::language_by_name("javascript") {
+                let js_query = HighlightQuery::new(&js_lang.highlight_query, self.color_map);
+                injection_queries.insert("javascript".to_string(), js_query);
+            }
+            // Load CSS highlight query for <style> tags
+            if let Some(css_lang) = languages::language_by_name("css") {
+                let css_query = HighlightQuery::new(&css_lang.highlight_query, self.color_map);
+                injection_queries.insert("css".to_string(), css_query);
+            }
+            // Load TypeScript highlight query for <script lang="ts">
+            if let Some(ts_lang) = languages::language_by_name("typescript") {
+                let ts_query = HighlightQuery::new(&ts_lang.highlight_query, self.color_map);
+                injection_queries.insert("typescript".to_string(), ts_query);
+            }
+        }
+
         self.language_queries = Some(LanguageQueries {
             syntax_query: HighlightQuery::new(&language.highlight_query, self.color_map),
             language,
+            injection_queries,
         });
     }
 
@@ -188,6 +212,26 @@ impl SyntaxTreeState {
             // Merge the highlights into the combined map
             for (highlight_range, color) in highlights.iter() {
                 combined_highlights.insert(highlight_range.clone(), *color);
+            }
+
+            // Process injections for embedded languages (e.g., JS/CSS in Vue)
+            if let Some(injections_query) = &language_queries.language.injections_query {
+                if !language_queries.injection_queries.is_empty() {
+                    let injection_highlights = language_queries
+                        .syntax_query
+                        .get_injection_highlights(
+                            range.clone(),
+                            injections_query,
+                            &language_queries.injection_queries,
+                            buffer.as_ref(ctx),
+                            tree,
+                        );
+
+                    // Merge injection highlights (these override main highlights)
+                    for (highlight_range, color) in injection_highlights.iter() {
+                        combined_highlights.insert(highlight_range.clone(), *color);
+                    }
+                }
             }
         }
 

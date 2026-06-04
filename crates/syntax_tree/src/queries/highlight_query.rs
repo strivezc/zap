@@ -1,6 +1,7 @@
-use std::{iter, ops::Range};
+use std::{collections::HashMap, iter, ops::Range};
 
 use arborium::tree_sitter::{Node, Query, QueryCursor, TextProvider, Tree};
+use languages;
 use rangemap::RangeMap;
 use streaming_iterator::StreamingIterator;
 use string_offset::{ByteOffset, CharOffset};
@@ -70,6 +71,116 @@ impl HighlightQuery {
                         ByteOffset::from(insertion_range.end).to_buffer_char_offset(buffer);
                     if char_start < char_end {
                         range_map.insert(char_start..char_end, color);
+                    }
+                }
+            }
+        }
+
+        range_map
+    }
+
+    /// Process language injections and return highlights for injected regions.
+    /// This handles embedded languages like JavaScript/CSS in Vue files.
+    pub fn get_injection_highlights(
+        &self,
+        range: Range<CharOffset>,
+        injections_query: &Query,
+        injection_highlight_queries: &HashMap<String, HighlightQuery>,
+        buffer: &Buffer,
+        tree: &Tree,
+    ) -> RangeMap<CharOffset, ColorU> {
+        let mut range_map = RangeMap::new();
+
+        let mut cursor = QueryCursor::new();
+        let byte_start = range.start.to_buffer_byte_offset(buffer).as_usize();
+        let byte_end = range.end.to_buffer_byte_offset(buffer).as_usize();
+        cursor.set_byte_range(byte_start..byte_end);
+
+        let mut captures = cursor.captures(injections_query, tree.root_node(), TextBuffer(buffer));
+
+        while let Some(matches) = captures.next() {
+            let match_ = &matches.0;
+
+            // Find the language and content from the injection match
+            let mut lang_name: Option<String> = None;
+            let mut content_node: Option<Node> = None;
+
+            for cap in match_.captures {
+                let capture_name = injections_query.capture_names()[cap.index as usize];
+                match capture_name {
+                    "injection.language" => {
+                        // This is set by #set! directive in the query
+                        // We'll try to read it from the node if it exists
+                        let node_bytes = buffer.bytes_in_range(
+                            ByteOffset::from(cap.node.start_byte()),
+                            ByteOffset::from(cap.node.end_byte()),
+                        );
+                        let bytes: Vec<u8> = node_bytes.collect();
+                        if let Ok(s) = std::str::from_utf8(&bytes) {
+                            if !s.is_empty() {
+                                lang_name = Some(s.to_string());
+                            }
+                        }
+                    }
+                    "injection.content" => {
+                        content_node = Some(cap.node);
+                    }
+                    _ => {
+                        // Check if this capture contains the language name
+                        // (from attribute values like lang="ts")
+                        if capture_name.starts_with("@_") {
+                            // This is a predicate capture, not content
+                            let node_bytes = buffer.bytes_in_range(
+                                ByteOffset::from(cap.node.start_byte()),
+                                ByteOffset::from(cap.node.end_byte()),
+                            );
+                            let bytes: Vec<u8> = node_bytes.collect();
+                            if let Ok(s) = std::str::from_utf8(&bytes) {
+                                if !s.is_empty() {
+                                    lang_name = Some(s.to_string());
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            if let Some(node) = content_node {
+                // Determine the language
+                let lang = lang_name.unwrap_or_else(|| {
+                    // Default to javascript for Vue script elements
+                    "javascript".to_string()
+                });
+
+                // Normalize language name
+                let normalized_lang = match lang.as_str() {
+                    "js" | "jsx" => "javascript",
+                    "ts" | "tsx" => "typescript",
+                    "scss" | "less" | "postcss" => "css",
+                    other => other,
+                };
+
+                if let Some(injection_highlight) =
+                    injection_highlight_queries.get(normalized_lang)
+                {
+                    // Get the language's highlight query for the injection
+                    if let Some(lang_obj) = languages::language_by_name(normalized_lang) {
+                        let content_range = node.byte_range();
+                        let content_char_start =
+                            ByteOffset::from(content_range.start).to_buffer_char_offset(buffer);
+                        let content_char_end =
+                            ByteOffset::from(content_range.end).to_buffer_char_offset(buffer);
+
+                        let highlights = injection_highlight.get_highlighted_chunks(
+                            content_char_start..content_char_end,
+                            &lang_obj.highlight_query,
+                            buffer,
+                            tree,
+                        );
+
+                        for (highlight_range, color) in highlights.iter() {
+                            range_map.insert(highlight_range.clone(), *color);
+                        }
                     }
                 }
             }
