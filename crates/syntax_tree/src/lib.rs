@@ -13,7 +13,7 @@ use parking_lot::Mutex;
 use arborium::tree_sitter::{InputEdit, Parser, Tree};
 use futures::stream::AbortHandle;
 use queries::{
-    highlight_query::HighlightQuery,
+    highlight_query::{HighlightQuery, InjectionHighlightQuery},
     indent_query::{indentation_delta, IndentDelta},
 };
 use rangemap::{RangeMap, RangeSet};
@@ -44,7 +44,7 @@ struct LanguageQueries {
     language: Arc<Language>,
     syntax_query: HighlightQuery,
     /// Highlight queries for injected languages (e.g., JavaScript, CSS for Vue)
-    injection_queries: HashMap<String, HighlightQuery>,
+    injection_queries: HashMap<String, InjectionHighlightQuery>,
 }
 
 /// Single-entry cache for highlight queries.
@@ -111,24 +111,22 @@ impl SyntaxTreeState {
     }
 
     pub fn set_language(&mut self, language: Arc<Language>) {
-        // Load injection highlight queries for embedded languages
         let mut injection_queries = HashMap::new();
 
         if language.injections_query.is_some() {
-            // Load JavaScript highlight query for <script> tags
-            if let Some(js_lang) = languages::language_by_name("javascript") {
-                let js_query = HighlightQuery::new(&js_lang.highlight_query, self.color_map);
-                injection_queries.insert("javascript".to_string(), js_query);
-            }
-            // Load CSS highlight query for <style> tags
-            if let Some(css_lang) = languages::language_by_name("css") {
-                let css_query = HighlightQuery::new(&css_lang.highlight_query, self.color_map);
-                injection_queries.insert("css".to_string(), css_query);
-            }
-            // Load TypeScript highlight query for <script lang="ts">
-            if let Some(ts_lang) = languages::language_by_name("typescript") {
-                let ts_query = HighlightQuery::new(&ts_lang.highlight_query, self.color_map);
-                injection_queries.insert("typescript".to_string(), ts_query);
+            // 中文注释：这里按 Vue injections.scm 里会出现的语言集合预热查询，避免渲染时重复查表。
+            for injection_language in ["javascript", "typescript", "jsx", "tsx", "css", "scss"] {
+                if let Some(injected_language) = languages::language_by_name(injection_language) {
+                    let highlight_query =
+                        HighlightQuery::new(&injected_language.highlight_query, self.color_map);
+                    injection_queries.insert(
+                        injection_language.to_string(),
+                        InjectionHighlightQuery {
+                            language: injected_language,
+                            highlight_query,
+                        },
+                    );
+                }
             }
         }
 
@@ -211,9 +209,8 @@ impl SyntaxTreeState {
             // Process injections for embedded languages (e.g., JS/CSS in Vue)
             if let Some(injections_query) = &language_queries.language.injections_query {
                 if !language_queries.injection_queries.is_empty() {
-                    let injection_highlights = language_queries
-                        .syntax_query
-                        .get_injection_highlights(
+                    let injection_highlights =
+                        language_queries.syntax_query.get_injection_highlights(
                             range.clone(),
                             injections_query,
                             &language_queries.injection_queries,

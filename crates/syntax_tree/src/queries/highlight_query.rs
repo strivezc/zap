@@ -1,7 +1,6 @@
-use std::{collections::HashMap, iter, ops::Range};
+use std::{cell::RefCell, collections::HashMap, iter, ops::Range, sync::Arc};
 
-use arborium::tree_sitter::{Node, Query, QueryCursor, TextProvider, Tree};
-use languages;
+use arborium::tree_sitter::{Node, Parser, Query, QueryCursor, TextProvider, Tree};
 use rangemap::RangeMap;
 use streaming_iterator::StreamingIterator;
 use string_offset::{ByteOffset, CharOffset};
@@ -10,6 +9,10 @@ use warp_editor::content::{
     text::Bytes,
 };
 use warpui::color::ColorU;
+
+thread_local! {
+    static INJECTION_PARSER: RefCell<Parser> = RefCell::new(Parser::new());
+}
 
 /// Color mapping from parsed syntax token name to its corresponding highlighting color.
 #[derive(Clone, Copy)]
@@ -27,6 +30,11 @@ pub struct ColorMap {
 /// Query for retrieving syntax highlighting information on the tokens.
 pub struct HighlightQuery {
     highlight_map: Vec<Option<ColorU>>,
+}
+
+pub struct InjectionHighlightQuery {
+    pub language: Arc<languages::Language>,
+    pub highlight_query: HighlightQuery,
 }
 
 impl HighlightQuery {
@@ -85,7 +93,7 @@ impl HighlightQuery {
         &self,
         range: Range<CharOffset>,
         injections_query: &Query,
-        injection_highlight_queries: &HashMap<String, HighlightQuery>,
+        injection_highlight_queries: &HashMap<String, InjectionHighlightQuery>,
         buffer: &Buffer,
         tree: &Tree,
     ) -> RangeMap<CharOffset, ColorU> {
@@ -96,87 +104,74 @@ impl HighlightQuery {
         let byte_end = range.end.to_buffer_byte_offset(buffer).as_usize();
         cursor.set_byte_range(byte_start..byte_end);
 
-        let mut captures = cursor.captures(injections_query, tree.root_node(), TextBuffer(buffer));
+        let injection_content_idx = injections_query
+            .capture_names()
+            .iter()
+            .position(|name| *name == "injection.content")
+            .map(|idx| idx as u32);
+        let injection_language_idx = injections_query
+            .capture_names()
+            .iter()
+            .position(|name| *name == "injection.language")
+            .map(|idx| idx as u32);
 
-        while let Some(matches) = captures.next() {
-            let match_ = &matches.0;
+        let mut matches = cursor.matches(injections_query, tree.root_node(), TextBuffer(buffer));
 
-            // Find the language and content from the injection match
-            let mut lang_name: Option<String> = None;
+        while let Some(query_match) = matches.next() {
+            // 中文注释：优先读取 query 的 #set! 属性，这是注入语言的权威来源。
+            // Source: arborium-highlight-2.18.0/src/tree_sitter.rs
+            let mut lang_name = injections_query
+                .property_settings(query_match.pattern_index)
+                .iter()
+                .find(|prop| prop.key.as_ref() == "injection.language")
+                .and_then(|prop| prop.value.as_deref())
+                .map(str::to_owned);
             let mut content_node: Option<Node> = None;
 
-            for cap in match_.captures {
-                let capture_name = injections_query.capture_names()[cap.index as usize];
-                match capture_name {
-                    "injection.language" => {
-                        // This is set by #set! directive in the query
-                        // We'll try to read it from the node if it exists
-                        let node_bytes = buffer.bytes_in_range(
-                            ByteOffset::from(cap.node.start_byte()),
-                            ByteOffset::from(cap.node.end_byte()),
-                        );
-                        let bytes: Vec<u8> = node_bytes.collect();
-                        if let Ok(s) = std::str::from_utf8(&bytes) {
-                            if !s.is_empty() {
-                                lang_name = Some(s.to_string());
-                            }
-                        }
-                    }
-                    "injection.content" => {
-                        content_node = Some(cap.node);
-                    }
-                    _ => {
-                        // Check if this capture contains the language name
-                        // (from attribute values like lang="ts")
-                        if capture_name.starts_with("@_") {
-                            // This is a predicate capture, not content
-                            let node_bytes = buffer.bytes_in_range(
-                                ByteOffset::from(cap.node.start_byte()),
-                                ByteOffset::from(cap.node.end_byte()),
-                            );
-                            let bytes: Vec<u8> = node_bytes.collect();
-                            if let Ok(s) = std::str::from_utf8(&bytes) {
-                                if !s.is_empty() {
-                                    lang_name = Some(s.to_string());
-                                }
-                            }
+            for cap in query_match.captures {
+                if Some(cap.index) == injection_content_idx {
+                    content_node = Some(cap.node);
+                } else if Some(cap.index) == injection_language_idx && lang_name.is_none() {
+                    let bytes = collect_buffer_bytes(
+                        buffer,
+                        ByteOffset::from(cap.node.start_byte()),
+                        ByteOffset::from(cap.node.end_byte()),
+                    );
+                    if let Ok(value) = std::str::from_utf8(&bytes) {
+                        if !value.is_empty() {
+                            lang_name = Some(value.to_string());
                         }
                     }
                 }
             }
 
-            if let Some(node) = content_node {
-                // Determine the language
-                let lang = lang_name.unwrap_or_else(|| {
-                    // Default to javascript for Vue script elements
-                    "javascript".to_string()
-                });
+            if let (Some(node), Some(lang_name)) = (content_node, lang_name) {
+                let normalized_lang = normalize_injection_language_name(&lang_name);
 
-                // Normalize language name
-                let normalized_lang = match lang.as_str() {
-                    "js" | "jsx" => "javascript",
-                    "ts" | "tsx" => "typescript",
-                    "scss" | "less" | "postcss" => "css",
-                    other => other,
-                };
+                if let Some(injection_query) = injection_highlight_queries.get(normalized_lang) {
+                    let content_range = node.byte_range();
+                    let local_start = byte_start.saturating_sub(content_range.start);
+                    let local_end = byte_end
+                        .min(content_range.end)
+                        .saturating_sub(content_range.start);
 
-                if let Some(injection_highlight) =
-                    injection_highlight_queries.get(normalized_lang)
-                {
-                    // Get the language's highlight query for the injection
-                    if let Some(lang_obj) = languages::language_by_name(normalized_lang) {
-                        let content_range = node.byte_range();
-                        let content_char_start =
-                            ByteOffset::from(content_range.start).to_buffer_char_offset(buffer);
-                        let content_char_end =
-                            ByteOffset::from(content_range.end).to_buffer_char_offset(buffer);
-
-                        let highlights = injection_highlight.get_highlighted_chunks(
-                            content_char_start..content_char_end,
-                            &lang_obj.highlight_query,
+                    if local_start < local_end {
+                        let source = collect_buffer_bytes(
                             buffer,
-                            tree,
+                            ByteOffset::from(content_range.start),
+                            ByteOffset::from(content_range.end),
                         );
+
+                        // 中文注释：注入片段必须先按目标语言单独建树，再把高亮偏移回原文件。
+                        let highlights = injection_query
+                            .highlight_query
+                            .get_highlighted_chunks_for_injection(
+                                local_start..local_end,
+                                &injection_query.language,
+                                &source,
+                                content_range.start,
+                                buffer,
+                            );
 
                         for (highlight_range, color) in highlights.iter() {
                             range_map.insert(highlight_range.clone(), *color);
@@ -188,6 +183,83 @@ impl HighlightQuery {
 
         range_map
     }
+
+    fn get_highlighted_chunks_for_injection(
+        &self,
+        local_byte_range: Range<usize>,
+        language: &languages::Language,
+        source: &[u8],
+        base_byte_offset: usize,
+        buffer: &Buffer,
+    ) -> RangeMap<CharOffset, ColorU> {
+        INJECTION_PARSER.with(|parser| {
+            let mut parser = parser.borrow_mut();
+            parser
+                .set_language(&language.grammar)
+                .expect("注入语言语法应当兼容 parser");
+
+            let Some(tree) = parser.parse(source, None) else {
+                return RangeMap::new();
+            };
+
+            let mut range_map = RangeMap::new();
+            let mut cursor = QueryCursor::new();
+            cursor.set_byte_range(local_byte_range);
+            let mut captures = cursor.captures(
+                &language.highlight_query,
+                tree.root_node(),
+                TextSlice(source),
+            );
+
+            while let Some(matches) = captures.next() {
+                for cap in matches.0.captures {
+                    let insertion_range = cap.node.byte_range();
+                    let color = self
+                        .highlight_map
+                        .get(cap.index as usize)
+                        .and_then(|inner| *inner);
+
+                    if let Some(color) = color {
+                        let global_start =
+                            injection_byte_to_buffer_byte(base_byte_offset, insertion_range.start);
+                        let global_end =
+                            injection_byte_to_buffer_byte(base_byte_offset, insertion_range.end);
+                        let char_start =
+                            ByteOffset::from(global_start).to_buffer_char_offset(buffer);
+                        let char_end = ByteOffset::from(global_end).to_buffer_char_offset(buffer);
+                        if char_start < char_end {
+                            range_map.insert(char_start..char_end, color);
+                        }
+                    }
+                }
+            }
+
+            range_map
+        })
+    }
+}
+
+fn injection_byte_to_buffer_byte(base_byte_offset: usize, local_byte_offset: usize) -> usize {
+    // 中文注释：注入片段来自已解析的 Vue tree-sitter 节点，映射回 Buffer 时需要抵消
+    // Buffer/TreeSitter 边界上的 1-byte 偏移，避免 token 首字符漏高亮。
+    base_byte_offset + local_byte_offset.saturating_sub(1)
+}
+
+fn normalize_injection_language_name(name: &str) -> &str {
+    match name {
+        "js" => "javascript",
+        "ts" => "typescript",
+        "less" | "postcss" => "scss",
+        other => other,
+    }
+}
+
+fn collect_buffer_bytes(buffer: &Buffer, start: ByteOffset, end: ByteOffset) -> Vec<u8> {
+    let mut bytes = Vec::new();
+    for chunk in buffer.bytes_in_range(start, end) {
+        bytes.extend_from_slice(chunk);
+    }
+    bytes
 }
 
 fn convert_capture_name_to_color(name: &str, color_map: &ColorMap) -> Option<ColorU> {

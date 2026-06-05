@@ -422,6 +422,9 @@ rmcp = { git = "https://github.com/warpdotdev/rmcp.git", rev = "c0f65dc441af7d71
 debug = 1
 # Force the rust compiler to create a dSYM. Starting in 1.53 the default on MacOS is "unpacked".
 split-debuginfo = "packed"
+# 优化内存占用：关闭LTO，增加codegen-units
+lto = false
+codegen-units = 16
 
 [profile.dev]
 # Use line-tables-only to speed up dev builds. Change to `debug = true` if you

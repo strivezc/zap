@@ -1,0 +1,53 @@
+name: Build Zap for Windows
+
+on:
+  workflow_dispatch:  # 手动触发
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        submodules: recursive
+
+    - name: Install Rust
+      uses: dtolnay/rust-toolchain@stable
+
+    - name: Install protoc
+      uses: arduino/setup-protoc@v3
+      with:
+        repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Install Strawberry Perl
+      run: |
+        choco install strawberryperl -y
+        echo "C:\Strawberry\perl\bin" | Out-File -Append -Encoding utf8 $env:GITHUB_PATH
+        echo "OPENSSL_SRC_PERL=C:\Strawberry\perl\bin\perl" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+
+    - name: Cache cargo registry and build
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.cargo/registry
+          ~/.cargo/git
+          target
+        key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+        restore-keys: |
+          ${{ runner.os }}-cargo-
+
+    - name: Build release
+      run: cargo build --release --features release_bundle
+      env:
+        CARGO_FULL_PROFILE: release
+
+    - name: Upload artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: zap-windows-x64
+        path: target/release/zap-oss.exe
