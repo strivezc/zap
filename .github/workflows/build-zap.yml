@@ -45,9 +45,25 @@ jobs:
       run: cargo build --release --features release_bundle
       env:
         CARGO_FULL_PROFILE: release
+        OPENSSL_SRC_PERL: C:\Strawberry\perl\bin\perl
+
+    - name: Debug - List build output
+      run: |
+        echo "=== Checking target/release ==="
+        dir target\release
+        echo "=== Checking for zap-oss.exe ==="
+        if (Test-Path "target\release\zap-oss.exe") {
+          echo "zap-oss.exe FOUND"
+          Get-Item "target\release\zap-oss.exe" | Select-Object Length
+        } else {
+          echo "zap-oss.exe NOT FOUND"
+        }
 
     - name: Upload artifact
       uses: actions/upload-artifact@v4
       with:
         name: zap-windows-x64
-        path: target/release/zap-oss.exe
+        path: |
+          target/release/zap-oss.exe
+          target/release/*.dll
+          target/release/x64/**
