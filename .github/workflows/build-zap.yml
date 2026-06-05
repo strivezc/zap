@@ -63,7 +63,4 @@ jobs:
       uses: actions/upload-artifact@v4
       with:
         name: zap-windows-x64
-        path: |
-          target/release/zap-oss.exe
-          target/release/*.dll
-          target/release/x64/**
+        path: target/release/zap-oss.exe
