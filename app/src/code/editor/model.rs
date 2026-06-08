@@ -2046,7 +2046,7 @@ impl CodeEditorModel {
         let actionable_lines = lines
             .iter()
             .filter_map(|line| {
-                let kind = kinds.get(line.saturating_sub(1)).copied().flatten()?;
+                let kind = kinds.get(line.saturating_sub(&1)).copied().flatten()?;
                 let body = Self::line_body_for_comment(buffer, *line)?;
                 Some((*line, kind, body))
             })
@@ -2066,8 +2066,8 @@ impl CodeEditorModel {
                 let replacement = if remove {
                     Self::uncomment_vue_line(kind, &body.text)?
                 } else {
-                    Some(Self::comment_vue_line(kind, &body.text))
-                }?;
+                    Self::comment_vue_line(kind, &body.text)
+                };
                 Some((replacement, body.range))
             })
             .collect_vec();
